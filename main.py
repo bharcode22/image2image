@@ -14,6 +14,16 @@ app = FastAPI()
 lock = threading.Lock()
 refiner_pipeline = None
 refiner_lock = threading.Lock()
+uncensored_pipeline = None
+uncensored_lock = threading.Lock()
+
+FLUX_DEV_PATH = "black-forest-labs/FLUX.1-dev"
+HEARTSYNC_LORA_PATH = "/home/pod/.cache/huggingface/hub/models--Heartsync--Flux-NSFW-uncensored/snapshots/328160f16bc4072cf2bb7ee162d77f3b9b5f786c"
+
+SMNTH_LORA_PATH = "/home/pod/.cache/huggingface/hub/models--Kakelaka--Smnth_v1_NSFW1/snapshots/a6239cf7523ff91a10969b9cc9ccf633537e0ebb/Smnth_v1_NSFW1.safetensors"
+SMNTH_BASE_MODEL = "Tongyi-MAI/Z-Image-Turbo"
+smnth_pipeline = None
+smnth_lock = threading.Lock()
 
 MODEL_PATH = "/home/pod/.cache/huggingface/hub/models--stabilityai--stable-diffusion-xl-base-1.0/snapshots/462165984030d82259a11f4367a4eed129e94a7b"
 # MODEL_PATH = "/home/pod/.cache/huggingface/hub/models--black-forest-labs--FLUX.2-klein-4B/snapshots/e7b7dc27f91deacad38e78976d1f2b499d76a294"
@@ -75,6 +85,30 @@ def get_refiner():
     return refiner_pipeline
 
 
+def get_uncensored_pipeline():
+    global uncensored_pipeline
+    if uncensored_pipeline is not None:
+        return uncensored_pipeline
+    with uncensored_lock:
+        if uncensored_pipeline is not None:
+            return uncensored_pipeline
+        # FLUX.1-dev akan download otomatis jika belum ada (~24GB)
+        pipe = AutoPipelineForText2Image.from_pretrained(
+            FLUX_DEV_PATH,
+            torch_dtype=torch.bfloat16,
+        )
+        pipe.load_lora_weights(
+            HEARTSYNC_LORA_PATH,
+            weight_name="lora.safetensors",
+            adapter_name="uncensored",
+        )
+        pipe.enable_model_cpu_offload()
+        pipe.enable_attention_slicing()
+        uncensored_pipeline = pipe
+    return uncensored_pipeline
+
+
+
 OUTPUT_DIR = "/home/pod/folder/zaq/outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -111,33 +145,42 @@ def generate(req: PromptRequest):
 
 @app.post("/generate/difusion")
 def generate_difusion(req: PromptRequest):
-    n_steps = 40
+    n_steps = 50
     high_noise_frac = 0.8
 
-    prompt = req.prompt
+    full_prompt = (
+        req.prompt
+        + "Ultra-realistic, photorealistic, natural skin textures, cinematic lighting, shallow depth of field, HDR, 8K. Highly detailed"
+    )
     negative_prompt = (
-        "blurry, low quality, distorted face, bad anatomy, disfigured, "
-        "deformed, ugly, watermark, signature"
+        "cartoon, anime, illustration, painting, drawing, art, sketch, "
+        "cgi, render, 3d, blurry, soft focus, low quality, worst quality, "
+        "lowres, jpeg artifacts, distorted face, bad anatomy, disfigured, "
+        "deformed, extra limbs, extra fingers, missing fingers, "
+        "poorly drawn hands, poorly drawn face, mutation, "
+        "watermark, signature, text, logo, oversaturated, overexposed"
     )
 
     with lock:
         # Stage 1: base — hasilkan latent sampai 80% denoising
         latent = pipeline(
-            prompt=prompt,
+            prompt=full_prompt,
             negative_prompt=negative_prompt,
             height=1216,
             width=832,
             num_inference_steps=n_steps,
+            guidance_scale=7.5,
             denoising_end=high_noise_frac,
             output_type="latent",
         ).images
 
-        # Stage 2: refiner — polish 20% sisanya dari latent (download otomatis jika belum ada)
+        # Stage 2: refiner — polish detail foto realistis
         refiner = get_refiner()
         image = refiner(
-            prompt=prompt,
+            prompt=full_prompt,
             negative_prompt=negative_prompt,
             num_inference_steps=n_steps,
+            guidance_scale=7.5,
             denoising_start=high_noise_frac,
             image=latent,
         ).images[0]
@@ -177,3 +220,151 @@ def img2img(prompt: str = Form(...), file: UploadFile = File(...)):
     image.save(filepath)
 
     return {"filename": filename, "path": filepath}
+
+
+@app.post("/img2img/difusion")
+def img2img_difusion(
+    prompt: str = Form(...),
+    file: UploadFile = File(...),
+    strength: float = Form(default=0.55),      # 0.4–0.65: jaga struktur, 0.7+ ubah drastis
+    guidance_scale: float = Form(default=7.5),
+):
+    from PIL import Image
+    import io
+
+    image_bytes = file.file.read()
+
+    full_prompt = (
+        prompt
+        + ", ultra-realistic, photorealistic, natural skin textures, cinematic lighting, "
+        "shallow depth of field, HDR, 8K, highly detailed, sharp focus"
+    )
+    negative_prompt = (
+        "blurry, low quality, distorted face, bad anatomy, disfigured, "
+        "deformed, ugly, watermark, signature, oversaturated"
+    )
+
+    n_steps = 40
+    high_noise_frac = 0.8
+
+    with lock:
+        init_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        init_image = resize_to_portrait(init_image, (832, 1216))
+
+        # Stage 1: base — denoise sampai 80%, output latent
+        latent = img2img_pipeline(
+            prompt=full_prompt,
+            negative_prompt=negative_prompt,
+            image=init_image,
+            strength=strength,
+            num_inference_steps=n_steps,
+            guidance_scale=guidance_scale,
+            denoising_end=high_noise_frac,
+            output_type="latent",
+        ).images
+
+        # Stage 2: refiner — polish 20% sisanya
+        refiner = get_refiner()
+        image = refiner(
+            prompt=full_prompt,
+            negative_prompt=negative_prompt,
+            image=latent,
+            num_inference_steps=n_steps,
+            strength=strength,
+            guidance_scale=guidance_scale,
+            denoising_start=high_noise_frac,
+        ).images[0]
+
+    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
+    filepath = os.path.join(OUTPUT_DIR, filename)
+    image.save(filepath)
+
+    return {"filename": filename, "path": filepath}
+
+
+def get_smnth_pipeline():
+    global smnth_pipeline
+    if smnth_pipeline is not None:
+        return smnth_pipeline
+    with smnth_lock:
+        if smnth_pipeline is not None:
+            return smnth_pipeline
+        pipe = AutoPipelineForText2Image.from_pretrained(
+            SMNTH_BASE_MODEL,
+            torch_dtype=torch.bfloat16,
+        )
+        pipe.load_lora_weights(SMNTH_LORA_PATH)
+        pipe.enable_model_cpu_offload()
+        pipe.enable_attention_slicing()
+        smnth_pipeline = pipe
+    return smnth_pipeline
+
+
+@app.post("/generate/smnth")
+def generate_smnth(req: PromptRequest):
+    full_prompt = (
+        "Smnth_v1, "
+        + req.prompt
+        + ", ultra-realistic, photorealistic, natural skin textures, "
+        "cinematic lighting, shallow depth of field, HDR, 8K, highly detailed, sharp focus"
+    )
+    negative_prompt = (
+        "(deformed iris, deformed pupils), text, watermark, logo, signature, "
+        "low quality, worst quality, blurry, grainy, low resolution, "
+        "(plastic skin, fake skin, airbrushed), (cartoon, anime, 3d, render, illustration), "
+        "(deformed, distorted, disfigured), poorly drawn, bad anatomy, wrong anatomy, "
+        "extra limb, missing limb, floating limbs, (mutated hands and fingers), "
+        "disconnected limbs, mutation, mutated, ugly, disgusting, amputation"
+    )
+
+    seed = torch.randint(0, 2**32 - 1, (1,)).item()
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+
+    with smnth_lock:
+        pipe = get_smnth_pipeline()
+        image = pipe(
+            prompt=full_prompt,
+            negative_prompt=negative_prompt,
+            guidance_scale=7.0,
+            num_inference_steps=30,
+            width=832,
+            height=1216,
+            generator=generator,
+        ).images[0]
+
+    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
+    filepath = os.path.join(OUTPUT_DIR, filename)
+    image.save(filepath)
+
+    return {"filename": filename, "path": filepath, "seed": seed}
+
+
+@app.post("/generate/uncensored")
+def generate_uncensored(req: PromptRequest):
+    full_prompt = (
+        req.prompt
+        + ", RAW photo, ultra realistic, hyperrealistic, photorealistic, "
+        "DSLR, 85mm lens, f/1.4 aperture, natural skin texture, "
+        "subsurface scattering, pore detail, cinematic lighting, "
+        "soft rim light, 8K UHD, masterpiece, best quality"
+    )
+
+    seed = torch.randint(0, 2**32 - 1, (1,)).item()
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+
+    with uncensored_lock:
+        pipe = get_uncensored_pipeline()
+        image = pipe(
+            prompt=full_prompt,
+            guidance_scale=7.0,
+            num_inference_steps=28,
+            width=832,
+            height=1216,
+            generator=generator,
+        ).images[0]
+
+    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
+    filepath = os.path.join(OUTPUT_DIR, filename)
+    image.save(filepath)
+
+    return {"filename": filename, "path": filepath, "seed": seed}
