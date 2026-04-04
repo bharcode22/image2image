@@ -40,24 +40,22 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 @app.post("/generate")
 def generate(req: PromptRequest):
+    prompt = req.prompt + ", Ultra-realistic, photorealistic, natural skin textures, cinematic lighting, shallow depth of field, HDR, 8K. Highly detailed"
+
     with lock:
         try:
             image = pipeline(
-                prompt=req.prompt,
+                prompt=prompt,
                 height=1024,
                 width=1024,
-                num_inference_steps=35,
-                guidance_scale=6.5,
+                num_inference_steps=50,
             ).images[0]
         finally:
-            torch.cuda.empty_cache()
+            pass
 
     filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
     filepath = os.path.join(OUTPUT_DIR, filename)
     image.save(filepath)
-
-    buffered = BytesIO()
-    image.save(buffered, format="PNG")
 
     return {
         "filename": filename,
@@ -71,6 +69,8 @@ def img2img(prompt: str = Form(...), file: UploadFile = File(...)):
 
     image_bytes = file.file.read()
 
+    prompt = prompt + ", Ultra-realistic, photorealistic, natural skin textures, cinematic lighting, shallow depth of field, HDR, 8K. Highly detailed"
+
     with lock:
         try:
             init_image = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((1024, 1024), Image.LANCZOS)
@@ -78,22 +78,15 @@ def img2img(prompt: str = Form(...), file: UploadFile = File(...)):
             image = img2img_pipeline(
                 prompt=prompt,
                 image=init_image,
-                strength=0.35,              # 🔥 kontrol perubahan (penting banget)
-                guidance_scale=6.5,        # 🔥 biar prompt lebih akurat
-                num_inference_steps=35     # ⚡ lebih cepat tapi tetap tajam
+                num_inference_steps=35
             ).images[0]
 
         finally:
             pass
 
-    # Save image
     filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
     filepath = os.path.join(OUTPUT_DIR, filename)
     image.save(filepath)
-
-    # (optional) base64 kalau nanti butuh
-    buffered = BytesIO()
-    image.save(buffered, format="PNG")
 
     return {
         "filename": filename,
