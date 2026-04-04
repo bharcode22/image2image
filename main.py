@@ -9,16 +9,13 @@ import os
 import uuid
 from datetime import datetime
 from fastapi import UploadFile, File, Form
-
 app = FastAPI()
-
 lock = threading.Lock()
-
 MODEL_PATH = "/home/pod/.cache/huggingface/hub/models--black-forest-labs--FLUX.2-klein-4B/snapshots/e7b7dc27f91deacad38e78976d1f2b499d76a294"
 
 pipeline = AutoPipelineForText2Image.from_pretrained(
     MODEL_PATH,
-    torch_dtype=torch.float16,
+    torch_dtype=torch.bfloat16,
     local_files_only=True
 )
 
@@ -39,7 +36,6 @@ def health():
 
 OUTPUT_DIR = "/home/pod/folder/zaq/outputs"
 
-# pastikan folder ada
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 @app.post("/generate")
@@ -48,33 +44,22 @@ def generate(req: PromptRequest):
         try:
             image = pipeline(
                 prompt=req.prompt,
-                height=512,
-                width=512,
-                num_inference_steps=20
+                height=1024,
+                width=1024,
+                num_inference_steps=35,
+                guidance_scale=6.5,
             ).images[0]
         finally:
             torch.cuda.empty_cache()
 
-    # =========================
-    # 🧾 Generate nama file unik
-    # =========================
     filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
     filepath = os.path.join(OUTPUT_DIR, filename)
-
-    # =========================
-    # 💾 Simpan ke file
-    # =========================
     image.save(filepath)
 
-    # =========================
-    # 📦 Convert ke base64 (opsional)
-    # =========================
     buffered = BytesIO()
     image.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
 
     return {
-        "image": img_str,
         "filename": filename,
         "path": filepath
     }
@@ -85,28 +70,32 @@ def img2img(prompt: str = Form(...), file: UploadFile = File(...)):
     import io
 
     image_bytes = file.file.read()
-    init_image = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((512, 512))
 
     with lock:
         try:
-            result = img2img_pipeline(
+            init_image = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((1024, 1024), Image.LANCZOS)
+
+            image = img2img_pipeline(
                 prompt=prompt,
                 image=init_image,
-                num_inference_steps=20
+                strength=0.35,              # 🔥 kontrol perubahan (penting banget)
+                guidance_scale=6.5,        # 🔥 biar prompt lebih akurat
+                num_inference_steps=35     # ⚡ lebih cepat tapi tetap tajam
             ).images[0]
-        finally:
-            torch.cuda.empty_cache()
 
+        finally:
+            pass
+
+    # Save image
     filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
     filepath = os.path.join(OUTPUT_DIR, filename)
-    result.save(filepath)
+    image.save(filepath)
 
+    # (optional) base64 kalau nanti butuh
     buffered = BytesIO()
-    result.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
+    image.save(buffered, format="PNG")
 
     return {
-        "image": img_str,
         "filename": filename,
         "path": filepath
     }
