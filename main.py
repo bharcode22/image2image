@@ -39,13 +39,10 @@ pipeline.enable_attention_slicing()
 
 img2img_pipeline = AutoPipelineForImage2Image.from_pipe(pipeline)
 
-
 class PromptRequest(BaseModel):
     prompt: str
 
-
 from PIL import Image
-
 
 def resize_to_portrait(img, target_size=(832, 1216)):
     target_w, target_h = target_size
