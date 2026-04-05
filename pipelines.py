@@ -75,13 +75,26 @@ smnth_lock = threading.Lock()
 
 def _offload_other_pipelines():
     """Move other pipelines off GPU before loading smnth to free VRAM."""
+    try:
+        from accelerate.hooks import remove_hook_from_submodules
+    except ImportError:
+        remove_hook_from_submodules = None
+
     for p in [pipeline, img2img_pipeline, refiner_pipeline, uncensored_pipeline]:
-        if p is not None and hasattr(p, "to"):
-            try:
-                p.to("cpu")
-            except Exception:
-                pass
+        if p is None:
+            continue
+        try:
+            if remove_hook_from_submodules is not None:
+                remove_hook_from_submodules(p)
+            for attr in ("unet", "transformer", "text_encoder", "text_encoder_2", "vae", "image_encoder"):
+                component = getattr(p, attr, None)
+                if component is not None and hasattr(component, "to"):
+                    component.to("cpu")
+        except Exception:
+            pass
+
     if torch.cuda.is_available():
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
 
@@ -100,17 +113,21 @@ def get_smnth_pipeline():
             SMNTH_BASE_MODEL,
             torch_dtype=torch.float16,
             local_files_only=True,
-        ).to("cuda")
+        )
 
         pipe.load_lora_weights(SMNTH_LORA_PATH)
 
+        pipe.enable_sequential_cpu_offload()
         pipe.enable_attention_slicing()
-        pipe.enable_vae_slicing()
-        pipe.enable_vae_tiling()
+        if hasattr(pipe, "enable_vae_slicing"):
+            pipe.enable_vae_slicing()
+
+        if hasattr(pipe, "enable_vae_tiling"):
+            pipe.enable_vae_tiling()
 
         try:
             pipe.enable_xformers_memory_efficient_attention()
-        except:
+        except Exception:
             pass
 
         smnth_pipeline = pipe

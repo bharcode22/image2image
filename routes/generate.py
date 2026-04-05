@@ -97,8 +97,8 @@ def _run_smnth(job_id: str, req_prompt: str):
 
         print(f"[SMNTH] 🎯 Prompt ready job_id={job_id}")
 
-        seed = torch.randint(0, 2**32 - 1, (1,), device="cuda").item()
-        generator = torch.Generator(device="cuda").manual_seed(seed)
+        seed = torch.randint(0, 2**32 - 1, (1,)).item()
+        generator = torch.Generator(device="cpu").manual_seed(seed)
 
         pipe = get_smnth_pipeline()
         print(f"[SMNTH] ⚙️ Pipeline loaded job_id={job_id}")
@@ -106,16 +106,15 @@ def _run_smnth(job_id: str, req_prompt: str):
         with smnth_lock:
             print(f"[SMNTH] ⏳ Generating image job_id={job_id}")
             with torch.inference_mode():
-                with torch.autocast("cuda"):
-                    image = pipe(
-                        prompt=full_prompt,
-                        negative_prompt=negative_prompt,
-                        guidance_scale=6.0,
-                        num_inference_steps=8,
-                        width=512,
-                        height=768,
-                        generator=generator,
-                    ).images[0]
+                image = pipe(
+                    prompt=full_prompt,
+                    negative_prompt=negative_prompt,
+                    guidance_scale=6.0,
+                    num_inference_steps=8,
+                    width=512,
+                    height=768,
+                    generator=generator,
+                ).images[0]
 
         filename, filepath = save_image(image)
         print(f"[SMNTH] 💾 Saved: {filepath} job_id={job_id}")
