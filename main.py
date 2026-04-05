@@ -107,11 +107,8 @@ def get_uncensored_pipeline():
         uncensored_pipeline = pipe
     return uncensored_pipeline
 
-
-
 OUTPUT_DIR = "/home/pod/folder/zaq/outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
 
 @app.get("/health")
 def health():
@@ -119,7 +116,6 @@ def health():
     if torch.cuda.is_available():
         vram_free = round(torch.cuda.mem_get_info()[0] / 1024**3, 2)
     return {"status": "ok", "vram_free_gb": vram_free}
-
 
 @app.post("/generate")
 def generate(req: PromptRequest):
@@ -141,7 +137,6 @@ def generate(req: PromptRequest):
     image.save(filepath)
 
     return {"filename": filename, "path": filepath}
-
 
 @app.post("/generate/difusion")
 def generate_difusion(req: PromptRequest):
@@ -191,7 +186,6 @@ def generate_difusion(req: PromptRequest):
 
     return {"filename": filename, "path": filepath}
 
-
 @app.post("/img2img")
 def img2img(prompt: str = Form(...), file: UploadFile = File(...)):
     from PIL import Image
@@ -220,7 +214,6 @@ def img2img(prompt: str = Form(...), file: UploadFile = File(...)):
     image.save(filepath)
 
     return {"filename": filename, "path": filepath}
-
 
 @app.post("/img2img/difusion")
 def img2img_difusion(
@@ -281,6 +274,17 @@ def img2img_difusion(
 
     return {"filename": filename, "path": filepath}
 
+def _offload_other_pipelines():
+    """Move other pipelines off GPU before loading smnth to free VRAM."""
+    global pipeline, img2img_pipeline, refiner_pipeline, uncensored_pipeline
+    for p in [pipeline, img2img_pipeline, refiner_pipeline, uncensored_pipeline]:
+        if p is not None and hasattr(p, 'to'):
+            try:
+                p.to('cpu')
+            except Exception:
+                pass
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 def get_smnth_pipeline():
     global smnth_pipeline
@@ -289,9 +293,11 @@ def get_smnth_pipeline():
     with smnth_lock:
         if smnth_pipeline is not None:
             return smnth_pipeline
+        _offload_other_pipelines()
         pipe = AutoPipelineForText2Image.from_pretrained(
             SMNTH_BASE_MODEL,
             torch_dtype=torch.bfloat16,
+            local_files_only=True,
         )
         pipe.load_lora_weights(SMNTH_LORA_PATH)
         pipe.enable_model_cpu_offload()
@@ -299,9 +305,9 @@ def get_smnth_pipeline():
         smnth_pipeline = pipe
     return smnth_pipeline
 
-
 @app.post("/generate/smnth")
 def generate_smnth(req: PromptRequest):
+    print('generate smith')
     full_prompt = (
         "Smnth_v1, "
         + req.prompt
@@ -320,15 +326,15 @@ def generate_smnth(req: PromptRequest):
     seed = torch.randint(0, 2**32 - 1, (1,)).item()
     generator = torch.Generator(device="cpu").manual_seed(seed)
 
+    pipe = get_smnth_pipeline()
     with smnth_lock:
-        pipe = get_smnth_pipeline()
         image = pipe(
             prompt=full_prompt,
             negative_prompt=negative_prompt,
             guidance_scale=7.0,
-            num_inference_steps=30,
-            width=832,
-            height=1216,
+            num_inference_steps=20,
+            width=768,
+            height=1024,
             generator=generator,
         ).images[0]
 
@@ -337,7 +343,6 @@ def generate_smnth(req: PromptRequest):
     image.save(filepath)
 
     return {"filename": filename, "path": filepath, "seed": seed}
-
 
 @app.post("/generate/uncensored")
 def generate_uncensored(req: PromptRequest):
