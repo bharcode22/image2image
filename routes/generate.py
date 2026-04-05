@@ -76,12 +76,16 @@ def generate_difusion(req: PromptRequest):
 
 def _run_smnth(job_id: str, req_prompt: str):
     try:
+        print(f"[SMNTH] 🚀 START job_id={job_id}")
+
         job_store.job_set(job_id, {"status": "processing"})
+
         full_prompt = (
             "Smnth_v1, "
             + req_prompt
-            + ", cinematic lighting, shallow depth of field, HDR, 8K, highly detailed, sharp focus"
+            + ", cinematic lighting, shallow depth of field, HDR, highly detailed, sharp focus"
         )
+
         negative_prompt = (
             "(deformed iris, deformed pupils), text, watermark, logo, signature, "
             "low quality, worst quality, blurry, grainy, low resolution, "
@@ -90,32 +94,60 @@ def _run_smnth(job_id: str, req_prompt: str):
             "extra limb, missing limb, floating limbs, (mutated hands and fingers), "
             "disconnected limbs, mutation, mutated, ugly, disgusting, amputation"
         )
-        seed = torch.randint(0, 2**32 - 1, (1,)).item()
-        generator = torch.Generator(device="cpu").manual_seed(seed)
+
+        print(f"[SMNTH] 🎯 Prompt ready job_id={job_id}")
+
+        seed = torch.randint(0, 2**32 - 1, (1,), device="cuda").item()
+        generator = torch.Generator(device="cuda").manual_seed(seed)
 
         pipe = get_smnth_pipeline()
+        print(f"[SMNTH] ⚙️ Pipeline loaded job_id={job_id}")
+
         with smnth_lock:
-            image = pipe(
-                prompt=full_prompt,
-                negative_prompt=negative_prompt,
-                guidance_scale=7.0,
-                num_inference_steps=20,
-                width=768,
-                height=1024,
-                generator=generator,
-            ).images[0]
+            print(f"[SMNTH] ⏳ Generating image job_id={job_id}")
+            with torch.inference_mode():
+                with torch.autocast("cuda"):
+                    image = pipe(
+                        prompt=full_prompt,
+                        negative_prompt=negative_prompt,
+                        guidance_scale=6.0,
+                        num_inference_steps=8,
+                        width=512,
+                        height=768,
+                        generator=generator,
+                    ).images[0]
 
         filename, filepath = save_image(image)
-        job_store.job_set(job_id, {"status": "done", "filename": filename, "path": filepath, "seed": seed})
-    except Exception as e:
-        job_store.job_set(job_id, {"status": "error", "error": str(e)})
+        print(f"[SMNTH] 💾 Saved: {filepath} job_id={job_id}")
 
+        torch.cuda.empty_cache()
+
+        job_store.job_set(job_id, {
+            "status": "done",
+            "filename": filename,
+            "path": filepath,
+            "seed": seed
+        })
+
+        print(f"[SMNTH] ✅ DONE job_id={job_id}")
+
+    except Exception as e:
+        print(f"[SMNTH] ❌ ERROR job_id={job_id} error={str(e)}")
+
+        job_store.job_set(job_id, {
+            "status": "error",
+            "error": str(e)
+        })
 
 @router.post("/generate/smnth")
 def generate_smnth(req: PromptRequest):
     job_id = uuid.uuid4().hex
+
+    print(f"[API] 📥 Request received job_id={job_id}")
+
     job_store.job_set(job_id, {"status": "pending"})
     job_store._executor.submit(_run_smnth, job_id, req.prompt)
+
     return {"job_id": job_id, "status": "pending"}
 
 

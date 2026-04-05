@@ -89,17 +89,30 @@ def get_smnth_pipeline():
     global smnth_pipeline
     if smnth_pipeline is not None:
         return smnth_pipeline
+
     with smnth_lock:
         if smnth_pipeline is not None:
             return smnth_pipeline
+
         _offload_other_pipelines()
+
         pipe = AutoPipelineForText2Image.from_pretrained(
             SMNTH_BASE_MODEL,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=torch.float16,
             local_files_only=True,
-        )
+        ).to("cuda")
+
         pipe.load_lora_weights(SMNTH_LORA_PATH)
-        pipe.enable_model_cpu_offload()
+
         pipe.enable_attention_slicing()
+        pipe.enable_vae_slicing()
+        pipe.enable_vae_tiling()
+
+        try:
+            pipe.enable_xformers_memory_efficient_attention()
+        except:
+            pass
+
         smnth_pipeline = pipe
+
     return smnth_pipeline
