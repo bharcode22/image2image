@@ -359,8 +359,7 @@ def _run_smnth(job_id: str, req_prompt: str):
         full_prompt = (
             "Smnth_v1, "
             + req_prompt
-            + ", ultra-realistic, photorealistic, natural skin textures, "
-            "cinematic lighting, shallow depth of field, HDR, 8K, highly detailed, sharp focus"
+            + ", cinematic lighting, shallow depth of field, HDR, 8K, highly detailed, sharp focus"
         )
         negative_prompt = (
             "(deformed iris, deformed pupils), text, watermark, logo, signature, "
@@ -392,7 +391,6 @@ def _run_smnth(job_id: str, req_prompt: str):
     except Exception as e:
         _job_set(job_id, {"status": "error", "error": str(e)})
 
-
 @app.post("/generate/smnth")
 def generate_smnth(req: PromptRequest):
     job_id = uuid.uuid4().hex
@@ -405,10 +403,7 @@ def _run_uncensored(job_id: str, req_prompt: str):
         _job_set(job_id, {"status": "processing"})
         full_prompt = (
             req_prompt
-            + ", RAW photo, ultra realistic, hyperrealistic, photorealistic, "
-            "DSLR, 85mm lens, f/1.4 aperture, natural skin texture, "
-            "subsurface scattering, pore detail, cinematic lighting, "
-            "soft rim light, 8K UHD, masterpiece, best quality"
+            + ", cinematic lighting, shallow depth of field, HDR, 8K, highly detailed, sharp focus"
         )
         seed = torch.randint(0, 2**32 - 1, (1,)).item()
         generator = torch.Generator(device="cpu").manual_seed(seed)
@@ -431,14 +426,12 @@ def _run_uncensored(job_id: str, req_prompt: str):
     except Exception as e:
         _job_set(job_id, {"status": "error", "error": str(e)})
 
-
 @app.post("/generate/uncensored")
 def generate_uncensored(req: PromptRequest):
     job_id = uuid.uuid4().hex
     _job_set(job_id, {"status": "pending"})
     _executor.submit(_run_uncensored, job_id, req.prompt)
     return {"job_id": job_id, "status": "pending"}
-
 
 @app.get("/job/{job_id}")
 def get_job(job_id: str):
