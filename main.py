@@ -9,6 +9,20 @@ import os
 import uuid
 from datetime import datetime
 from fastapi import UploadFile, File, Form
+from concurrent.futures import ThreadPoolExecutor
+
+# Job store untuk async generation
+_jobs: dict = {}
+_jobs_lock = threading.Lock()
+_executor = ThreadPoolExecutor(max_workers=2)
+
+def _job_set(job_id: str, data: dict):
+    with _jobs_lock:
+        _jobs[job_id] = data
+
+def _job_get(job_id: str):
+    with _jobs_lock:
+        return _jobs.get(job_id)
 
 app = FastAPI()
 lock = threading.Lock()
@@ -109,10 +123,47 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 @app.get("/health")
 def health():
-    vram_free = None
+    import psutil
+
+    # CPU
+    cpu_percent = psutil.cpu_percent(interval=0.1)
+    cpu_cores = psutil.cpu_count(logical=False)
+    cpu_threads = psutil.cpu_count(logical=True)
+
+    # RAM
+    ram = psutil.virtual_memory()
+    ram_total_gb = round(ram.total / 1024**3, 2)
+    ram_used_gb = round(ram.used / 1024**3, 2)
+    ram_free_gb = round(ram.available / 1024**3, 2)
+    ram_percent = ram.percent
+
+    # GPU / VRAM
+    gpu_info = None
     if torch.cuda.is_available():
-        vram_free = round(torch.cuda.mem_get_info()[0] / 1024**3, 2)
-    return {"status": "ok", "vram_free_gb": vram_free}
+        vram_free, vram_total = torch.cuda.mem_get_info()
+        gpu_info = {
+            "name": torch.cuda.get_device_name(0),
+            "vram_total_gb": round(vram_total / 1024**3, 2),
+            "vram_used_gb": round((vram_total - vram_free) / 1024**3, 2),
+            "vram_free_gb": round(vram_free / 1024**3, 2),
+            "vram_used_percent": round((vram_total - vram_free) / vram_total * 100, 1),
+        }
+
+    return {
+        "status": "ok",
+        "cpu": {
+            "usage_percent": cpu_percent,
+            "cores_physical": cpu_cores,
+            "cores_logical": cpu_threads,
+        },
+        "ram": {
+            "total_gb": ram_total_gb,
+            "used_gb": ram_used_gb,
+            "free_gb": ram_free_gb,
+            "used_percent": ram_percent,
+        },
+        "gpu": gpu_info,
+    }
 
 @app.post("/generate")
 def generate(req: PromptRequest):
@@ -302,71 +353,97 @@ def get_smnth_pipeline():
         smnth_pipeline = pipe
     return smnth_pipeline
 
+def _run_smnth(job_id: str, req_prompt: str):
+    try:
+        _job_set(job_id, {"status": "processing"})
+        full_prompt = (
+            "Smnth_v1, "
+            + req_prompt
+            + ", ultra-realistic, photorealistic, natural skin textures, "
+            "cinematic lighting, shallow depth of field, HDR, 8K, highly detailed, sharp focus"
+        )
+        negative_prompt = (
+            "(deformed iris, deformed pupils), text, watermark, logo, signature, "
+            "low quality, worst quality, blurry, grainy, low resolution, "
+            "(plastic skin, fake skin, airbrushed), (cartoon, anime, 3d, render, illustration), "
+            "(deformed, distorted, disfigured), poorly drawn, bad anatomy, wrong anatomy, "
+            "extra limb, missing limb, floating limbs, (mutated hands and fingers), "
+            "disconnected limbs, mutation, mutated, ugly, disgusting, amputation"
+        )
+        seed = torch.randint(0, 2**32 - 1, (1,)).item()
+        generator = torch.Generator(device="cpu").manual_seed(seed)
+
+        pipe = get_smnth_pipeline()
+        with smnth_lock:
+            image = pipe(
+                prompt=full_prompt,
+                negative_prompt=negative_prompt,
+                guidance_scale=7.0,
+                num_inference_steps=20,
+                width=768,
+                height=1024,
+                generator=generator,
+            ).images[0]
+
+        filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
+        filepath = os.path.join(OUTPUT_DIR, filename)
+        image.save(filepath)
+        _job_set(job_id, {"status": "done", "filename": filename, "path": filepath, "seed": seed})
+    except Exception as e:
+        _job_set(job_id, {"status": "error", "error": str(e)})
+
+
 @app.post("/generate/smnth")
 def generate_smnth(req: PromptRequest):
-    print('generate smith')
-    full_prompt = (
-        "Smnth_v1, "
-        + req.prompt
-        + ", ultra-realistic, photorealistic, natural skin textures, "
-        "cinematic lighting, shallow depth of field, HDR, 8K, highly detailed, sharp focus"
-    )
-    negative_prompt = (
-        "(deformed iris, deformed pupils), text, watermark, logo, signature, "
-        "low quality, worst quality, blurry, grainy, low resolution, "
-        "(plastic skin, fake skin, airbrushed), (cartoon, anime, 3d, render, illustration), "
-        "(deformed, distorted, disfigured), poorly drawn, bad anatomy, wrong anatomy, "
-        "extra limb, missing limb, floating limbs, (mutated hands and fingers), "
-        "disconnected limbs, mutation, mutated, ugly, disgusting, amputation"
-    )
+    job_id = uuid.uuid4().hex
+    _job_set(job_id, {"status": "pending"})
+    _executor.submit(_run_smnth, job_id, req.prompt)
+    return {"job_id": job_id, "status": "pending"}
 
-    seed = torch.randint(0, 2**32 - 1, (1,)).item()
-    generator = torch.Generator(device="cpu").manual_seed(seed)
+def _run_uncensored(job_id: str, req_prompt: str):
+    try:
+        _job_set(job_id, {"status": "processing"})
+        full_prompt = (
+            req_prompt
+            + ", RAW photo, ultra realistic, hyperrealistic, photorealistic, "
+            "DSLR, 85mm lens, f/1.4 aperture, natural skin texture, "
+            "subsurface scattering, pore detail, cinematic lighting, "
+            "soft rim light, 8K UHD, masterpiece, best quality"
+        )
+        seed = torch.randint(0, 2**32 - 1, (1,)).item()
+        generator = torch.Generator(device="cpu").manual_seed(seed)
 
-    pipe = get_smnth_pipeline()
-    with smnth_lock:
-        image = pipe(
-            prompt=full_prompt,
-            negative_prompt=negative_prompt,
-            guidance_scale=7.0,
-            num_inference_steps=20,
-            width=768,
-            height=1024,
-            generator=generator,
-        ).images[0]
+        with uncensored_lock:
+            pipe = get_uncensored_pipeline()
+            image = pipe(
+                prompt=full_prompt,
+                guidance_scale=7.0,
+                num_inference_steps=28,
+                width=832,
+                height=1216,
+                generator=generator,
+            ).images[0]
 
-    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
-    filepath = os.path.join(OUTPUT_DIR, filename)
-    image.save(filepath)
+        filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
+        filepath = os.path.join(OUTPUT_DIR, filename)
+        image.save(filepath)
+        _job_set(job_id, {"status": "done", "filename": filename, "path": filepath, "seed": seed})
+    except Exception as e:
+        _job_set(job_id, {"status": "error", "error": str(e)})
 
-    return {"filename": filename, "path": filepath, "seed": seed}
 
 @app.post("/generate/uncensored")
 def generate_uncensored(req: PromptRequest):
-    full_prompt = (
-        req.prompt
-        + ", RAW photo, ultra realistic, hyperrealistic, photorealistic, "
-        "DSLR, 85mm lens, f/1.4 aperture, natural skin texture, "
-        "subsurface scattering, pore detail, cinematic lighting, "
-        "soft rim light, 8K UHD, masterpiece, best quality"
-    )
+    job_id = uuid.uuid4().hex
+    _job_set(job_id, {"status": "pending"})
+    _executor.submit(_run_uncensored, job_id, req.prompt)
+    return {"job_id": job_id, "status": "pending"}
 
-    seed = torch.randint(0, 2**32 - 1, (1,)).item()
-    generator = torch.Generator(device="cpu").manual_seed(seed)
 
-    with uncensored_lock:
-        pipe = get_uncensored_pipeline()
-        image = pipe(
-            prompt=full_prompt,
-            guidance_scale=7.0,
-            num_inference_steps=28,
-            width=832,
-            height=1216,
-            generator=generator,
-        ).images[0]
-
-    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
-    filepath = os.path.join(OUTPUT_DIR, filename)
-    image.save(filepath)
-
-    return {"filename": filename, "path": filepath, "seed": seed}
+@app.get("/job/{job_id}")
+def get_job(job_id: str):
+    job = _job_get(job_id)
+    if job is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"job_id": job_id, **job}
