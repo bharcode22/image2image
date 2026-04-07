@@ -1,8 +1,9 @@
+import gc
 import threading
 import torch
-from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image, DiffusionPipeline
+from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
 
-from config import MODEL_PATH_FLUX, FLUX_DEV_PATH, HEARTSYNC_LORA_PATH, SMNTH_BASE_MODEL, SMNTH_LORA_PATH
+from config import MODEL_PATH_FLUX, SMNTH_BASE_MODEL, SMNTH_LORA_PATH
 
 lock = threading.Lock()
 
@@ -16,86 +17,48 @@ pipeline.enable_attention_slicing()
 
 img2img_pipeline = AutoPipelineForImage2Image.from_pipe(pipeline)
 
-# --- Refiner ---
-refiner_pipeline = None
-refiner_lock = threading.Lock()
-
-
-def get_refiner():
-    global refiner_pipeline
-    if refiner_pipeline is not None:
-        return refiner_pipeline
-    with refiner_lock:
-        if refiner_pipeline is not None:
-            return refiner_pipeline
-        refiner_pipeline = DiffusionPipeline.from_pretrained(
-            "stabilityai/stable-diffusion-xl-refiner-1.0",
-            text_encoder_2=pipeline.text_encoder_2,
-            vae=pipeline.vae,
-            torch_dtype=torch.bfloat16,
-            use_safetensors=True,
-            variant="fp16",
-        )
-        refiner_pipeline.enable_model_cpu_offload()
-        refiner_pipeline.enable_attention_slicing()
-    return refiner_pipeline
-
-
-# --- Uncensored ---
-uncensored_pipeline = None
-uncensored_lock = threading.Lock()
-
-
-def get_uncensored_pipeline():
-    global uncensored_pipeline
-    if uncensored_pipeline is not None:
-        return uncensored_pipeline
-    with uncensored_lock:
-        if uncensored_pipeline is not None:
-            return uncensored_pipeline
-        pipe = AutoPipelineForText2Image.from_pretrained(
-            FLUX_DEV_PATH,
-            torch_dtype=torch.bfloat16,
-        )
-        pipe.load_lora_weights(
-            HEARTSYNC_LORA_PATH,
-            weight_name="lora.safetensors",
-            adapter_name="uncensored",
-        )
-        pipe.enable_model_cpu_offload()
-        pipe.enable_attention_slicing()
-        uncensored_pipeline = pipe
-    return uncensored_pipeline
-
-
 # --- Smnth ---
 smnth_pipeline = None
 smnth_lock = threading.Lock()
 
 
-def _offload_other_pipelines():
-    """Move other pipelines off GPU before loading smnth to free VRAM."""
+def _unload_pipeline(p):
+    """Hapus satu pipeline dari RAM dan VRAM."""
+    if p is None:
+        return
     try:
         from accelerate.hooks import remove_hook_from_submodules
-    except ImportError:
-        remove_hook_from_submodules = None
+        remove_hook_from_submodules(p)
+    except Exception:
+        pass
+    for attr in ("unet", "transformer", "text_encoder", "text_encoder_2", "vae", "image_encoder"):
+        component = getattr(p, attr, None)
+        if component is not None:
+            try:
+                component.to("cpu")
+            except Exception:
+                pass
+            setattr(p, attr, None)
+    del p
 
-    for p in [pipeline, img2img_pipeline, refiner_pipeline, uncensored_pipeline]:
-        if p is None:
-            continue
-        try:
-            if remove_hook_from_submodules is not None:
-                remove_hook_from_submodules(p)
-            for attr in ("unet", "transformer", "text_encoder", "text_encoder_2", "vae", "image_encoder"):
-                component = getattr(p, attr, None)
-                if component is not None and hasattr(component, "to"):
-                    component.to("cpu")
-        except Exception:
-            pass
+
+def _offload_other_pipelines():
+    """Unload semua pipeline lain dari RAM/VRAM sebelum load smnth."""
+    global pipeline, img2img_pipeline
+
+    for p in [pipeline, img2img_pipeline]:
+        _unload_pipeline(p)
+
+    pipeline = None
+    img2img_pipeline = None
+
+    gc.collect()
 
     if torch.cuda.is_available():
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
+
+    print("[SMNTH] ♻️ All other pipelines unloaded from RAM")
 
 
 def get_smnth_pipeline():

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 import jobs as job_store
 from config import OUTPUT_DIR, URL
-from pipelines import pipeline, lock, get_refiner, get_uncensored_pipeline, get_smnth_pipeline, smnth_lock, uncensored_lock
+from pipelines import pipeline, lock, get_smnth_pipeline, smnth_lock
 from utils import save_image
 
 router = APIRouter()
@@ -23,9 +23,13 @@ def _run_generate(job_id: str, req_prompt: str):
         print(f"[FLUX] 🚀 START job_id={job_id}")
         job_store.job_set(job_id, {"status": "processing"})
 
+        # prompt = (
+        #     req_prompt
+        #     + ", Ultra-realistic, photorealistic, natural skin textures, cinematic lighting, shallow depth of field, HDR, 8K. Highly detailed"
+        # )
         prompt = (
             req_prompt
-            + ", Ultra-realistic, photorealistic, natural skin textures, cinematic lighting, shallow depth of field, HDR, 8K. Highly detailed"
+            + ", "
         )
 
         seed = torch.randint(0, 2**32 - 1, (1,)).item()
@@ -94,50 +98,6 @@ def generate(req: PromptRequest):
     }
 
 
-@router.post("/generate/difusion")
-def generate_difusion(req: PromptRequest):
-    n_steps = 50
-    high_noise_frac = 0.8
-
-    full_prompt = (
-        req.prompt
-        + "Ultra-realistic, photorealistic, natural skin textures, cinematic lighting, shallow depth of field, HDR, 8K. Highly detailed"
-    )
-    negative_prompt = (
-        "cartoon, anime, illustration, painting, drawing, art, sketch, "
-        "cgi, render, 3d, blurry, soft focus, low quality, worst quality, "
-        "lowres, jpeg artifacts, distorted face, bad anatomy, disfigured, "
-        "deformed, extra limbs, extra fingers, missing fingers, "
-        "poorly drawn hands, poorly drawn face, mutation, "
-        "watermark, signature, text, logo, oversaturated, overexposed"
-    )
-
-    with lock:
-        latent = pipeline(
-            prompt=full_prompt,
-            negative_prompt=negative_prompt,
-            height=1216,
-            width=832,
-            num_inference_steps=n_steps,
-            guidance_scale=7.5,
-            denoising_end=high_noise_frac,
-            output_type="latent",
-        ).images
-
-        refiner = get_refiner()
-        image = refiner(
-            prompt=full_prompt,
-            negative_prompt=negative_prompt,
-            num_inference_steps=n_steps,
-            guidance_scale=7.5,
-            denoising_start=high_noise_frac,
-            image=latent,
-        ).images[0]
-
-    filename, filepath = save_image(image)
-    return {"filename": filename, "path": filepath}
-
-
 def _run_smnth(job_id: str, req_prompt: str):
     try:
         print(f"[SMNTH] 🚀 START job_id={job_id}")
@@ -202,6 +162,7 @@ def _run_smnth(job_id: str, req_prompt: str):
             "error": str(e)
         })
 
+
 @router.post("/generate/smnth")
 def generate_smnth(req: PromptRequest):
     job_id = uuid.uuid4().hex
@@ -211,41 +172,6 @@ def generate_smnth(req: PromptRequest):
     job_store.job_set(job_id, {"status": "pending"})
     job_store._executor.submit(_run_smnth, job_id, req.prompt)
 
-    return {"job_id": job_id, "status": "pending"}
-
-
-def _run_uncensored(job_id: str, req_prompt: str):
-    try:
-        job_store.job_set(job_id, {"status": "processing"})
-        full_prompt = (
-            req_prompt
-            + ", cinematic lighting, shallow depth of field, HDR, 8K, highly detailed, sharp focus"
-        )
-        seed = torch.randint(0, 2**32 - 1, (1,)).item()
-        generator = torch.Generator(device="cpu").manual_seed(seed)
-
-        with uncensored_lock:
-            pipe = get_uncensored_pipeline()
-            image = pipe(
-                prompt=full_prompt,
-                guidance_scale=7.0,
-                num_inference_steps=28,
-                width=832,
-                height=1216,
-                generator=generator,
-            ).images[0]
-
-        filename, filepath = save_image(image, job_id)
-        job_store.job_set(job_id, {"status": "done", "filename": filename, "path": filepath, "seed": seed})
-    except Exception as e:
-        job_store.job_set(job_id, {"status": "error", "error": str(e)})
-
-
-@router.post("/generate/uncensored")
-def generate_uncensored(req: PromptRequest):
-    job_id = uuid.uuid4().hex
-    job_store.job_set(job_id, {"status": "pending"})
-    job_store._executor.submit(_run_uncensored, job_id, req.prompt)
     return {"job_id": job_id, "status": "pending"}
 
 
