@@ -23,9 +23,9 @@ def resize_to_portrait(img: Image.Image, target_size=(832, 1216)) -> Image.Image
     return img.resize(target_size, Image.LANCZOS)
 
 
-def save_image(image: Image.Image) -> tuple[str, str]:
+def save_image(image: Image.Image, job_id: str = None) -> tuple[str, str]:
     """Save image to OUTPUT_DIR and return (filename, filepath)."""
-    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
+    filename = f"{job_id}.png" if job_id else f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.png"
     filepath = os.path.join(OUTPUT_DIR, filename)
     image.save(filepath)
     return filename, filepath

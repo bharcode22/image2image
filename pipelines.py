@@ -113,22 +113,24 @@ def get_smnth_pipeline():
             SMNTH_BASE_MODEL,
             torch_dtype=torch.float16,
             local_files_only=True,
+            safety_checker=None,
+            requires_safety_checker=False,
         )
+
+        # Disable safety checker if it was loaded anyway
+        if hasattr(pipe, "safety_checker"):
+            pipe.safety_checker = None
 
         pipe.load_lora_weights(SMNTH_LORA_PATH)
 
-        pipe.enable_sequential_cpu_offload()
-        pipe.enable_attention_slicing()
+        pipe.enable_model_cpu_offload()
+
+        if hasattr(pipe, "enable_attention_slicing"):
+            pipe.enable_attention_slicing()
         if hasattr(pipe, "enable_vae_slicing"):
             pipe.enable_vae_slicing()
-
         if hasattr(pipe, "enable_vae_tiling"):
             pipe.enable_vae_tiling()
-
-        try:
-            pipe.enable_xformers_memory_efficient_attention()
-        except Exception:
-            pass
 
         smnth_pipeline = pipe
 
