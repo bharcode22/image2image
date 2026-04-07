@@ -1,2 +1,3 @@
 /outputs
 .env
+routes/__pycache__
