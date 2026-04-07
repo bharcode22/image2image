@@ -281,3 +281,12 @@ def download_image(job_id: str):
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Image not found")
     return FileResponse(filepath, media_type="image/png", filename=f"{job_id}.png", headers={"Content-Disposition": f"attachment; filename={job_id}.png"})
+
+
+@router.delete("/generate/delete/{job_id}")
+def delete_image(job_id: str):
+    filepath = os.path.join(OUTPUT_DIR, f"{job_id}.png")
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Image not found")
+    os.remove(filepath)
+    return {"message": "Image deleted", "job_id": job_id}
