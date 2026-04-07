@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 import jobs as job_store
 from config import OUTPUT_DIR, URL
-from pipelines import pipeline, lock, get_smnth_pipeline, smnth_lock
+from pipelines import pipeline, lock
 from utils import save_image
 
 router = APIRouter()
@@ -96,83 +96,6 @@ def generate(req: PromptRequest):
         "download-url": URL+'/generate/download/'+job_id,
         "seed": job.get("seed"),
     }
-
-
-def _run_smnth(job_id: str, req_prompt: str):
-    try:
-        print(f"[SMNTH] 🚀 START job_id={job_id}")
-
-        job_store.job_set(job_id, {"status": "processing"})
-
-        full_prompt = (
-            "Smnth_v1, "
-            + req_prompt
-            + ", cinematic lighting, shallow depth of field, HDR, highly detailed, sharp focus"
-        )
-
-        negative_prompt = (
-            "(deformed iris, deformed pupils), text, watermark, logo, signature, "
-            "low quality, worst quality, blurry, grainy, low resolution, "
-            "(plastic skin, fake skin, airbrushed), (cartoon, anime, 3d, render, illustration), "
-            "(deformed, distorted, disfigured), poorly drawn, bad anatomy, wrong anatomy, "
-            "extra limb, missing limb, floating limbs, (mutated hands and fingers), "
-            "disconnected limbs, mutation, mutated, ugly, disgusting, amputation"
-        )
-
-        print(f"[SMNTH] 🎯 Prompt ready job_id={job_id}")
-
-        seed = torch.randint(0, 2**32 - 1, (1,)).item()
-        generator = torch.Generator(device="cpu").manual_seed(seed)
-
-        pipe = get_smnth_pipeline()
-        print(f"[SMNTH] ⚙️ Pipeline loaded job_id={job_id}")
-
-        with smnth_lock:
-            print(f"[SMNTH] ⏳ Generating image job_id={job_id}")
-            with torch.inference_mode():
-                image = pipe(
-                    prompt=full_prompt,
-                    negative_prompt=negative_prompt,
-                    guidance_scale=6.0,
-                    num_inference_steps=8,
-                    width=512,
-                    height=768,
-                    generator=generator,
-                ).images[0]
-
-        filename, filepath = save_image(image, job_id)
-        print(f"[SMNTH] 💾 Saved: {filepath} job_id={job_id}")
-
-        torch.cuda.empty_cache()
-
-        job_store.job_set(job_id, {
-            "status": "done",
-            "filename": filename,
-            "path": filepath,
-            "seed": seed
-        })
-
-        print(f"[SMNTH] ✅ DONE job_id={job_id}")
-
-    except Exception as e:
-        print(f"[SMNTH] ❌ ERROR job_id={job_id} error={str(e)}")
-
-        job_store.job_set(job_id, {
-            "status": "error",
-            "error": str(e)
-        })
-
-
-@router.post("/generate/smnth")
-def generate_smnth(req: PromptRequest):
-    job_id = uuid.uuid4().hex
-
-    print(f"[API] 📥 Request received job_id={job_id}")
-
-    job_store.job_set(job_id, {"status": "pending"})
-    job_store._executor.submit(_run_smnth, job_id, req.prompt)
-
-    return {"job_id": job_id, "status": "pending"}
 
 
 @router.get("/generate/list")
