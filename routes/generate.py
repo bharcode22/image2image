@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import jobs as job_store
+from jobs import job_list
 from config import OUTPUT_DIR, URL
 from pipelines import pipeline, lock, get_refiner, get_uncensored_pipeline, get_smnth_pipeline, smnth_lock, uncensored_lock
 from utils import save_image
@@ -247,6 +248,22 @@ def generate_uncensored(req: PromptRequest):
     job_store.job_set(job_id, {"status": "pending"})
     job_store._executor.submit(_run_uncensored, job_id, req.prompt)
     return {"job_id": job_id, "status": "pending"}
+
+
+@router.get("/generate/list")
+def list_images():
+    all_jobs = job_list()
+    result = []
+    for job_id, job in all_jobs.items():
+        if job.get("status") == "done":
+            result.append({
+                "job_id": job_id,
+                "filename": job.get("filename"),
+                "seed": job.get("seed"),
+                "download_url": URL + "/generate/download/" + job_id,
+                "image_url": URL + "/generate/image/" + job_id,
+            })
+    return {"total": len(result), "images": result}
 
 
 @router.get("/generate/image/{job_id}")

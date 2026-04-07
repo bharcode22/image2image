@@ -14,3 +14,8 @@ def job_set(job_id: str, data: dict):
 def job_get(job_id: str):
     with _jobs_lock:
         return _jobs.get(job_id)
+
+
+def job_list():
+    with _jobs_lock:
+        return dict(_jobs)
