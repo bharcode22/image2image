@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import jobs as job_store
-from config import OUTPUT_DIR
+from config import OUTPUT_DIR, URL
 from pipelines import pipeline, lock, get_refiner, get_uncensored_pipeline, get_smnth_pipeline, smnth_lock, uncensored_lock
 from utils import save_image
 
@@ -27,11 +27,6 @@ def _run_generate(job_id: str, req_prompt: str):
             req_prompt
             + ", Ultra-realistic, photorealistic, natural skin textures, cinematic lighting, shallow depth of field, HDR, 8K. Highly detailed"
         )
-
-        # prompt = (
-        #     req_prompt
-        #     + ", anime style, high quality anime illustration, vibrant colors, soft shading, detailed character design, expressive eyes, clean line art, studio anime style, cinematic composition, depth of field, 4K, highly detailed"
-        # )
 
         seed = torch.randint(0, 2**32 - 1, (1,)).item()
         generator = torch.Generator(device="cpu").manual_seed(seed)
@@ -82,9 +77,21 @@ def generate(req: PromptRequest):
     print(f"[API] 📥 Request received job_id={job_id}")
 
     job_store.job_set(job_id, {"status": "pending"})
-    job_store._executor.submit(_run_generate, job_id, req.prompt)
+    future = job_store._executor.submit(_run_generate, job_id, req.prompt)
+    future.result()
 
-    return {"job_id": job_id, "status": "pending"}
+    job = job_store.job_get(job_id)
+    if job.get("status") == "error":
+        raise HTTPException(status_code=500, detail=job.get("error", "Generation failed"))
+
+    return {
+        "job_id": job_id,
+        "status": "done",
+        "filename": job.get("filename"),
+        "path": job.get("path"),
+        "download-url": URL+'/generate/download/'+job_id,
+        "seed": job.get("seed"),
+    }
 
 
 @router.post("/generate/difusion")

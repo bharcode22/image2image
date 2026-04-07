@@ -2,6 +2,7 @@ import os
 
 OUTPUT_DIR = "/home/pod/folder/zaq/outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+URL="http://192.168.199.40:8000"
 
 MODEL_PATH = "/home/pod/.cache/huggingface/hub/models--stabilityai--stable-diffusion-xl-base-1.0/snapshots/462165984030d82259a11f4367a4eed129e94a7b"
 MODEL_PATH_FLUX = "/home/pod/.cache/huggingface/hub/models--black-forest-labs--FLUX.2-klein-4B/snapshots/e7b7dc27f91deacad38e78976d1f2b499d76a294"
