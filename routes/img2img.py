@@ -8,20 +8,29 @@ import jobs as job_store
 from config import OUTPUT_DIR, URL
 from pipelines import img2img_pipeline, lock
 from utils import resize_to_portrait, save_image
+from typing import Optional
 
 router = APIRouter()
 
-
-def _run_img2img(job_id: str, image_bytes: bytes, prompt: str):
+def _run_img2img(job_id: str, image_bytes: bytes, prompt: str, height: int = None, width: int = None):
     try:
         print(f"[IMG2IMG] 🚀 START job_id={job_id}")
         job_store.job_set(job_id, {"status": "processing"})
+
+        # default fallback
+        height = height or 1216
+        width = width or 832
+
+        print({
+            "height": height,
+            "width": width
+        })
 
         seed = torch.randint(0, 2**32 - 1, (1,)).item()
         generator = torch.Generator(device="cpu").manual_seed(seed)
 
         init_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        init_image = resize_to_portrait(init_image, (832, 1216))
+        init_image = resize_to_portrait(init_image, (width, height))
 
         print(f"[IMG2IMG] ⏳ Generating image job_id={job_id}")
         with lock:
@@ -56,6 +65,8 @@ def _run_img2img(job_id: str, image_bytes: bytes, prompt: str):
 def img2img(
     prompt: str = Form(...),
     file: UploadFile = File(...),
+    height: Optional[int] = Form(None),
+    width: Optional[int] = Form(None),
 ):
     job_id = uuid.uuid4().hex
 
@@ -64,10 +75,20 @@ def img2img(
     image_bytes = file.file.read()
 
     job_store.job_set(job_id, {"status": "pending"})
-    future = job_store._executor.submit(_run_img2img, job_id, image_bytes, prompt)
+
+    future = job_store._executor.submit(
+        _run_img2img,
+        job_id,
+        image_bytes,
+        prompt,
+        height,
+        width
+    )
+
     future.result()
 
     job = job_store.job_get(job_id)
+
     if job.get("status") == "error":
         raise HTTPException(status_code=500, detail=job.get("error", "Generation failed"))
 

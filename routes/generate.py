@@ -10,27 +10,26 @@ import jobs as job_store
 from config import OUTPUT_DIR, URL
 from pipelines import pipeline, lock
 from utils import save_image
+from typing import Optional
 
 router = APIRouter()
 
-
 class PromptRequest(BaseModel):
     prompt: str
+    height: Optional[int] = None
+    width: Optional[int] = None
 
 
-def _run_generate(job_id: str, req_prompt: str):
+def _run_generate(job_id: str, req_prompt: str, height: int = None, width: int = None):
     try:
         print(f"[FLUX] 🚀 START job_id={job_id}")
         job_store.job_set(job_id, {"status": "processing"})
 
-        # prompt = (
-        #     req_prompt
-        #     + ", Ultra-realistic, photorealistic, natural skin textures, cinematic lighting, shallow depth of field, HDR, 8K. Highly detailed"
-        # )
-        prompt = (
-            req_prompt
-            + ", "
-        )
+        # default fallback
+        height = height or 1216
+        width = width or 832
+
+        prompt = req_prompt + ", "
 
         seed = torch.randint(0, 2**32 - 1, (1,)).item()
         generator = torch.Generator(device="cpu").manual_seed(seed)
@@ -42,17 +41,19 @@ def _run_generate(job_id: str, req_prompt: str):
 
         pipeline.set_progress_bar_config(disable=True)
         print(f"[FLUX] ⏳ Generating image job_id={job_id}")
+
         with lock:
             with torch.inference_mode():
                 image = pipeline(
                     prompt=prompt,
-                    height=1216,
-                    width=832,
+                    height=height,
+                    width=width,
                     num_inference_steps=num_steps,
                     generator=generator,
                     callback_on_step_end=_progress,
                     callback_on_step_end_tensor_inputs=[],
                 ).images[0]
+
         pbar.close()
 
         filename, filepath = save_image(image, job_id)
@@ -79,21 +80,38 @@ def generate(req: PromptRequest):
     job_id = uuid.uuid4().hex
 
     print(f"[API] 📥 Request received job_id={job_id}")
+    print({
+        "prompt": req.prompt,
+        "height": req.height,
+        "width": req.width
+    })
 
     job_store.job_set(job_id, {"status": "pending"})
-    future = job_store._executor.submit(_run_generate, job_id, req.prompt)
-    future.result()
+
+    future = job_store._executor.submit(
+        _run_generate,
+        job_id,
+        req.prompt,
+        req.height,
+        req.width
+    )
+
+    future.result()  # blocking (optional, lihat catatan di bawah)
 
     job = job_store.job_get(job_id)
+
     if job.get("status") == "error":
-        raise HTTPException(status_code=500, detail=job.get("error", "Generation failed"))
+        raise HTTPException(
+            status_code=500,
+            detail=job.get("error", "Generation failed")
+        )
 
     return {
         "job_id": job_id,
         "status": "done",
         "filename": job.get("filename"),
         "path": job.get("path"),
-        "download-url": URL+'/generate/download/'+job_id,
+        "download-url": URL + '/generate/download/' + job_id,
         "seed": job.get("seed"),
     }
 
@@ -101,10 +119,18 @@ def generate(req: PromptRequest):
 @router.get("/generate/list")
 def list_images():
     files = [f for f in os.listdir(OUTPUT_DIR) if f.endswith(".png")]
+
+    files = sorted(
+        files,
+        key=lambda f: os.stat(os.path.join(OUTPUT_DIR, f)).st_mtime,
+        reverse=True
+    )
+
     result = []
-    for f in sorted(files):
+    for f in files:
         job_id = os.path.splitext(f)[0]
         stat = os.stat(os.path.join(OUTPUT_DIR, f))
+
         result.append({
             "job_id": job_id,
             "filename": f,
@@ -113,6 +139,7 @@ def list_images():
             "download_url": URL + "/generate/download/" + job_id,
             "image_url": URL + "/generate/image/" + job_id,
         })
+
     return {"total": len(result), "images": result}
 
 
