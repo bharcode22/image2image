@@ -5,3 +5,8 @@ __pycache__
 ai-env
 .venv
 /.venv
+venv/lib/
+venv/
+ai-env/
+__pycache__/
+*.pyc
