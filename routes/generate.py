@@ -2,12 +2,12 @@ import os
 import uuid
 import torch
 from tqdm import tqdm
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import jobs as job_store
-from config import OUTPUT_DIR, URL
+from config import OUTPUT_DIR
 from pipelines import pipeline, lock
 from utils import save_image
 from typing import Optional
@@ -76,7 +76,7 @@ def _run_generate(job_id: str, req_prompt: str, height: int = None, width: int =
 
 
 @router.post("/generate")
-def generate(req: PromptRequest):
+def generate(req: PromptRequest, request: Request):
     job_id = uuid.uuid4().hex
 
     print(f"[API] 📥 Request received job_id={job_id}")
@@ -111,13 +111,13 @@ def generate(req: PromptRequest):
         "status": "done",
         "filename": job.get("filename"),
         "path": job.get("path"),
-        "download-url": URL + '/generate/download/' + job_id,
+        "download-url": str(request.base_url) + 'generate/download/' + job_id,
         "seed": job.get("seed"),
     }
 
 
 @router.get("/generate/list")
-def list_images():
+def list_images(request: Request):
     files = [f for f in os.listdir(OUTPUT_DIR) if f.endswith(".png")]
 
     files = sorted(
@@ -136,8 +136,8 @@ def list_images():
             "filename": f,
             "size_bytes": stat.st_size,
             "created_at": stat.st_mtime,
-            "download_url": URL + "/generate/download/" + job_id,
-            "image_url": URL + "/generate/image/" + job_id,
+            "download_url": str(request.base_url) + "generate/download/" + job_id,
+            "image_url": str(request.base_url) + "generate/image/" + job_id,
         })
 
     return {"total": len(result), "images": result}

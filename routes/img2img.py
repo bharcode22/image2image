@@ -2,10 +2,10 @@ import io
 import uuid
 import torch
 from PIL import Image
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 
 import jobs as job_store
-from config import OUTPUT_DIR, URL
+from config import OUTPUT_DIR
 from pipelines import img2img_pipeline, lock
 from utils import resize_to_portrait, save_image
 from typing import Optional
@@ -63,6 +63,7 @@ def _run_img2img(job_id: str, image_bytes: bytes, prompt: str, height: int = Non
 
 @router.post("/img2img")
 def img2img(
+    request: Request,
     prompt: str = Form(...),
     file: UploadFile = File(...),
     height: Optional[int] = Form(None),
@@ -97,6 +98,6 @@ def img2img(
         "status": "done",
         "filename": job.get("filename"),
         "path": job.get("path"),
-        "download-url": URL + "/generate/download/" + job_id,
+        "download-url": str(request.base_url) + "generate/download/" + job_id,
         "seed": job.get("seed"),
     }
