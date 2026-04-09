@@ -17,8 +17,11 @@ Project ini adalah API untuk generate gambar menggunakan model **FLUX.2-klein-4B
 ### 1. Clone Repository
 
 ```bash
-https: git clone https://github.com/bharcode22/image2image.git
-ssh: git clone git@github.com:bharcode22/image2image.git
+git clone https://github.com/bharcode22/image2image.git
+cd image2image
+```
+```bash
+git clone git@github.com:bharcode22/image2image.git
 cd image2image
 ```
 
