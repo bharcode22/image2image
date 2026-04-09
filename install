@@ -1,5 +1,3 @@
 hf download black-forest-labs/FLUX.2-klein-4B
 hf download black-forest-labs/FLUX.2-dev
 hf download black-forest-labs/FLUX.2-klein-base-4B
-
-models--black-forest-labs--FLUX.2-klein-4B
