@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routes import health, generate, img2img, jobs
+from routes import health, generate, img2img, jobs, metrics
 
 app = FastAPI()
 
@@ -16,3 +16,4 @@ app.include_router(health.router)
 app.include_router(generate.router)
 app.include_router(img2img.router)
 app.include_router(jobs.router)
+app.include_router(metrics.router)

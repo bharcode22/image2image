@@ -18,8 +18,12 @@ def _run_img2img(job_id: str, image_bytes: bytes, prompt: str, height: int = Non
         job_store.job_set(job_id, {"status": "processing"})
 
         # default fallback
-        height = height or 1216
-        width = width or 832
+        height = height or 768
+        width = width or 512
+
+        # FLUX butuh dimensi kelipatan 16
+        height = (height // 16) * 16
+        width = (width // 16) * 16
 
         print({
             "height": height,
@@ -33,6 +37,7 @@ def _run_img2img(job_id: str, image_bytes: bytes, prompt: str, height: int = Non
         init_image = resize_to_portrait(init_image, (width, height))
 
         print(f"[IMG2IMG] ⏳ Generating image job_id={job_id}")
+        torch.cuda.empty_cache()
         with lock:
             with torch.inference_mode():
                 image = img2img_pipeline(

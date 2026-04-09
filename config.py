@@ -1,5 +1,8 @@
 import os
 
+# Kurangi fragmentasi memori CUDA
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 OUTPUT_DIR = "/home/pod/folder/zaq/outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

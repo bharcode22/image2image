@@ -26,8 +26,12 @@ def _run_generate(job_id: str, req_prompt: str, height: int = None, width: int =
         job_store.job_set(job_id, {"status": "processing"})
 
         # default fallback
-        height = height or 1216
-        width = width or 832
+        height = height or 768
+        width = width or 512
+
+        # FLUX butuh dimensi kelipatan 16
+        height = (height // 16) * 16
+        width = (width // 16) * 16
 
         prompt = req_prompt + ", "
 
@@ -42,6 +46,7 @@ def _run_generate(job_id: str, req_prompt: str, height: int = None, width: int =
         pipeline.set_progress_bar_config(disable=True)
         print(f"[FLUX] ⏳ Generating image job_id={job_id}")
 
+        torch.cuda.empty_cache()
         with lock:
             with torch.inference_mode():
                 image = pipeline(
