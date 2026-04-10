@@ -44,6 +44,15 @@ def _build_negative(user_negative: str) -> str:
     return _DEFAULT_NEGATIVE
 
 
+class NsfwPromptRequest(BaseModel):
+    prompt: str
+    negative_prompt: Optional[str] = None
+    height: Optional[int] = None
+    width: Optional[int] = None
+    num_inference_steps: Optional[int] = None
+    guidance_scale: Optional[float] = None
+
+
 # ─── txt2img ────────────────────────────────────────────────────────────────
 
 def _run_nsfw_generate(job_id, prompt, negative_prompt, height, width, num_inference_steps, guidance_scale):
@@ -170,15 +179,6 @@ def _run_nsfw_img2img(job_id, image_bytes, prompt, negative_prompt, height, widt
     except Exception as e:
         print(f"[NSFW-IMG2IMG] ❌ ERROR job_id={job_id} error={str(e)}")
         job_store.job_set(job_id, {"status": "error", "error": str(e)})
-
-
-class NsfwPromptRequest(BaseModel):
-    prompt: str
-    negative_prompt: Optional[str] = None
-    height: Optional[int] = None
-    width: Optional[int] = None
-    num_inference_steps: Optional[int] = None
-    guidance_scale: Optional[float] = None
 
 
 @router.post("/nsfw/img2img")
