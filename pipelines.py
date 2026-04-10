@@ -35,6 +35,8 @@ nsfw_pipeline = AutoPipelineForText2Image.from_pretrained(
 # accelerate hooks override perilaku .to() standar PyTorch
 if hasattr(nsfw_pipeline, 'vae'):
     nsfw_pipeline.vae = nsfw_pipeline.vae.to(torch.float32)
+    # Matikan force_upcast agar pipeline tidak trigger deprecated upcast_vae()
+    nsfw_pipeline.vae.config.force_upcast = False
 
 nsfw_pipeline.enable_sequential_cpu_offload()
 nsfw_pipeline.enable_attention_slicing()
