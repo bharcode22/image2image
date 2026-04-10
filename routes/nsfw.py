@@ -233,7 +233,7 @@ def nsfw_img2img(
 
 # ─── img2img chain: upload → FLUX img2img → NSFW img2img ────────────────────
 
-def _run_img2img_chain(job_id, image_bytes, prompt, negative_prompt, height, width, flux_steps, nsfw_steps, flux_strength, nsfw_strength, guidance_scale):
+def _run_img2img_chain(job_id, image_bytes, prompt, negative_prompt, height, width, flux_steps, nsfw_steps, nsfw_strength, guidance_scale):
     try:
         print(f"[IMG2IMG-CHAIN] 🚀 START job_id={job_id}")
         job_store.job_set(job_id, {"status": "processing"})
@@ -260,7 +260,6 @@ def _run_img2img_chain(job_id, image_bytes, prompt, negative_prompt, height, wid
                 flux_result = img2img_pipeline(
                     prompt=prompt,
                     image=init_image,
-                    strength=flux_strength,
                     num_inference_steps=flux_steps,
                     generator=generator,
                 ).images[0]
@@ -314,7 +313,6 @@ def nsfw_img2img_chain(
     width: Optional[int] = Form(None),
     flux_steps: Optional[int] = Form(None),
     nsfw_steps: Optional[int] = Form(None),
-    flux_strength: Optional[float] = Form(None),
     nsfw_strength: Optional[float] = Form(None),
     guidance_scale: Optional[float] = Form(None),
 ):
@@ -334,8 +332,6 @@ def nsfw_img2img_chain(
         width or 1024,
         flux_steps or 8,
         nsfw_steps or 35,
-        # FLUX strength rendah: perbaiki struktur tanpa ubah terlalu banyak
-        flux_strength if flux_strength is not None else 0.35,
         # NSFW strength sedang: apply style sambil pertahankan hasil FLUX
         nsfw_strength if nsfw_strength is not None else 0.55,
         guidance_scale if guidance_scale is not None else 7.5,
