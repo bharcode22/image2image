@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 import jobs as job_store
 from config import OUTPUT_DIR
-from pipelines import pipeline, nsfw_pipeline, nsfw_img2img_pipeline, lock
+from pipelines import pipeline, img2img_pipeline, nsfw_pipeline, nsfw_img2img_pipeline, lock
 from utils import save_image, resize_to_portrait
 from typing import Optional
 
@@ -231,7 +231,132 @@ def nsfw_img2img(
     }
 
 
-# ─── FLUX → NSFW chain ──────────────────────────────────────────────────────
+# ─── img2img chain: upload → FLUX img2img → NSFW img2img ────────────────────
+
+def _run_img2img_chain(job_id, image_bytes, prompt, negative_prompt, height, width, flux_steps, nsfw_steps, flux_strength, nsfw_strength, guidance_scale):
+    try:
+        print(f"[IMG2IMG-CHAIN] 🚀 START job_id={job_id}")
+        job_store.job_set(job_id, {"status": "processing"})
+
+        # FLUX butuh kelipatan 16, NSFW butuh kelipatan 8
+        flux_h = (height // 16) * 16
+        flux_w = (width // 16) * 16
+        nsfw_h = (height // 8) * 8
+        nsfw_w = (width // 8) * 8
+
+        seed = torch.randint(0, 2**32 - 1, (1,)).item()
+        generator = torch.Generator(device="cpu").manual_seed(seed)
+
+        init_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        init_image = resize_to_portrait(init_image, (flux_w, flux_h))
+
+        # Step 1: FLUX img2img — perbaiki struktur & komposisi gambar input
+        img2img_pipeline.set_progress_bar_config(disable=True)
+        print(f"[IMG2IMG-CHAIN] ⏳ Step 1: FLUX img2img job_id={job_id}")
+
+        torch.cuda.empty_cache()
+        with lock:
+            with torch.inference_mode():
+                flux_result = img2img_pipeline(
+                    prompt=prompt,
+                    image=init_image,
+                    strength=flux_strength,
+                    num_inference_steps=flux_steps,
+                    generator=generator,
+                ).images[0]
+
+        # Step 2: NSFW img2img — apply ultra realistic style di atas hasil FLUX
+        nsfw_init = flux_result.resize((nsfw_w, nsfw_h), Image.LANCZOS)
+        enhanced_prompt = _enhance_prompt(prompt)
+        full_negative = _build_negative(negative_prompt)
+
+        pbar = tqdm(total=nsfw_steps, desc=f"[IMG2IMG-CHAIN] NSFW step job_id={job_id}")
+        _progress = lambda pipe, step, timestep, cb: (pbar.update(1), cb)[1]
+
+        nsfw_img2img_pipeline.set_progress_bar_config(disable=True)
+        print(f"[IMG2IMG-CHAIN] ⏳ Step 2: NSFW img2img job_id={job_id}")
+
+        torch.cuda.empty_cache()
+        with lock:
+            with torch.inference_mode():
+                image = nsfw_img2img_pipeline(
+                    prompt=enhanced_prompt,
+                    negative_prompt=full_negative,
+                    image=nsfw_init,
+                    strength=nsfw_strength,
+                    num_inference_steps=nsfw_steps,
+                    guidance_scale=guidance_scale,
+                    generator=generator,
+                    callback_on_step_end=_progress,
+                    callback_on_step_end_tensor_inputs=[],
+                ).images[0]
+        pbar.close()
+
+        filename, filepath = save_image(image, job_id)
+        print(f"[IMG2IMG-CHAIN] 💾 Saved: {filepath} job_id={job_id}")
+        torch.cuda.empty_cache()
+
+        job_store.job_set(job_id, {"status": "done", "filename": filename, "path": filepath, "seed": seed})
+        print(f"[IMG2IMG-CHAIN] ✅ DONE job_id={job_id}")
+
+    except Exception as e:
+        print(f"[IMG2IMG-CHAIN] ❌ ERROR job_id={job_id} error={str(e)}")
+        job_store.job_set(job_id, {"status": "error", "error": str(e)})
+
+
+@router.post("/nsfw/img2img/chain")
+def nsfw_img2img_chain(
+    request: Request,
+    prompt: str = Form(...),
+    file: UploadFile = File(...),
+    negative_prompt: Optional[str] = Form(None),
+    height: Optional[int] = Form(None),
+    width: Optional[int] = Form(None),
+    flux_steps: Optional[int] = Form(None),
+    nsfw_steps: Optional[int] = Form(None),
+    flux_strength: Optional[float] = Form(None),
+    nsfw_strength: Optional[float] = Form(None),
+    guidance_scale: Optional[float] = Form(None),
+):
+    """Upload gambar → FLUX img2img (perbaiki struktur) → NSFW img2img (apply ultra realistic style)."""
+    job_id = uuid.uuid4().hex
+    print(f"[API] 📥 img2img chain request job_id={job_id}")
+
+    image_bytes = file.file.read()
+    job_store.job_set(job_id, {"status": "pending"})
+    future = job_store._executor.submit(
+        _run_img2img_chain,
+        job_id,
+        image_bytes,
+        prompt,
+        negative_prompt or "",
+        height or 1024,
+        width or 1024,
+        flux_steps or 8,
+        nsfw_steps or 35,
+        # FLUX strength rendah: perbaiki struktur tanpa ubah terlalu banyak
+        flux_strength if flux_strength is not None else 0.35,
+        # NSFW strength sedang: apply style sambil pertahankan hasil FLUX
+        nsfw_strength if nsfw_strength is not None else 0.55,
+        guidance_scale if guidance_scale is not None else 7.5,
+    )
+    future.result()
+
+    job = job_store.job_get(job_id)
+    if job.get("status") == "error":
+        raise HTTPException(status_code=500, detail=job.get("error", "Generation failed"))
+
+    return {
+        "job_id": job_id,
+        "status": "done",
+        "filename": job.get("filename"),
+        "path": job.get("path"),
+        "download-url": str(request.base_url) + "nsfw/download/" + job_id,
+        "seed": job.get("seed"),
+    }
+
+
+# ─── FLUX txt2img → NSFW img2img chain ──────────────────────────────────────
 # FLUX generate image → hasilnya dipakai sebagai input ke NSFW img2img
 
 def _run_flux_nsfw_chain(job_id, prompt, negative_prompt, height, width, flux_steps, nsfw_steps, guidance_scale, strength):
