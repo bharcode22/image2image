@@ -1,6 +1,11 @@
+import warnings
 import threading
 import torch
 from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
+
+# Suppress FutureWarning dari diffusers tentang upcast_vae yang deprecated
+# Perilaku masih benar, hanya API-nya yang akan diubah di versi mendatang
+warnings.filterwarnings("ignore", message=".*upcast_vae.*", category=FutureWarning)
 
 from config import MODEL_PATH_FLUX, MODEL_PATH_NSFW
 
@@ -29,14 +34,6 @@ nsfw_pipeline = AutoPipelineForText2Image.from_pretrained(
     torch_dtype=torch.float16,
     local_files_only=True,
 )
-
-# Cast VAE ke float32 sebelum offload — fix FutureWarning upcast_vae
-# Harus dilakukan SEBELUM enable_sequential_cpu_offload karena setelah itu
-# accelerate hooks override perilaku .to() standar PyTorch
-if hasattr(nsfw_pipeline, 'vae'):
-    nsfw_pipeline.vae = nsfw_pipeline.vae.to(torch.float32)
-    # Matikan force_upcast agar pipeline tidak trigger deprecated upcast_vae()
-    nsfw_pipeline.vae.config.force_upcast = False
 
 nsfw_pipeline.enable_sequential_cpu_offload()
 nsfw_pipeline.enable_attention_slicing()
