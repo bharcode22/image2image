@@ -147,7 +147,13 @@ def _run_nsfw_img2img(job_id, image_bytes, prompt, negative_prompt, height, widt
         init_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         init_image = resize_to_portrait(init_image, (width, height))
 
-        print(f"[NSFW-IMG2IMG] ⏳ Generating image job_id={job_id}")
+        # Jumlah actual denoising steps = ceil(num_inference_steps * strength)
+        actual_steps = max(1, int(num_inference_steps * strength + 0.9999))
+        pbar = tqdm(total=actual_steps, desc=f"[NSFW-IMG2IMG] job_id={job_id}")
+        _progress = lambda pipe, step, timestep, cb: (pbar.update(1), cb)[1]
+
+        nsfw_img2img_pipeline.set_progress_bar_config(disable=True)
+        print(f"[NSFW-IMG2IMG] ⏳ Generating image job_id={job_id} steps={actual_steps} strength={strength}")
         torch.cuda.empty_cache()
         with lock:
             with torch.inference_mode():
@@ -159,7 +165,11 @@ def _run_nsfw_img2img(job_id, image_bytes, prompt, negative_prompt, height, widt
                     num_inference_steps=num_inference_steps,
                     guidance_scale=guidance_scale,
                     generator=generator,
+                    callback_on_step_end=_progress,
+                    callback_on_step_end_tensor_inputs=[],
                 ).images[0]
+
+        pbar.close()
 
         filename, filepath = save_image(image, job_id)
         print(f"[NSFW-IMG2IMG] 💾 Saved: {filepath} job_id={job_id}")
@@ -202,8 +212,8 @@ def nsfw_img2img(
         num_inference_steps or 40,
         # guidance 7.0: balance antara prompt adherence & naturalness
         guidance_scale if guidance_scale is not None else 7.0,
-        # strength 0.5: pertahankan struktur input, tambah detail NSFW style
-        strength if strength is not None else 0.5,
+        # strength 0.35: pertahankan ~65% struktur asli (termasuk wajah), cukup untuk style NSFW
+        strength if strength is not None else 0.35,
     )
     future.result()
 
