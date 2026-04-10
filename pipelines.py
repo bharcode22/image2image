@@ -1,7 +1,7 @@
 import warnings
 import threading
 import torch
-from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
+from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image, DPMSolverMultistepScheduler
 
 # Suppress FutureWarning dari diffusers tentang upcast_vae yang deprecated
 # Perilaku masih benar, hanya API-nya yang akan diubah di versi mendatang
@@ -33,6 +33,13 @@ nsfw_pipeline = AutoPipelineForText2Image.from_pretrained(
     MODEL_PATH_NSFW,
     torch_dtype=torch.float16,
     local_files_only=True,
+)
+
+# DPM++ 2M Karras: konvergensi lebih cepat & kualitas lebih baik dari default PNDM
+nsfw_pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
+    nsfw_pipeline.scheduler.config,
+    use_karras_sigmas=True,
+    algorithm_type="dpmsolver++",
 )
 
 nsfw_pipeline.enable_sequential_cpu_offload()
