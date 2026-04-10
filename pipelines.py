@@ -29,6 +29,13 @@ nsfw_pipeline = AutoPipelineForText2Image.from_pretrained(
     torch_dtype=torch.float16,
     local_files_only=True,
 )
+
+# Cast VAE ke float32 sebelum offload — fix FutureWarning upcast_vae
+# Harus dilakukan SEBELUM enable_sequential_cpu_offload karena setelah itu
+# accelerate hooks override perilaku .to() standar PyTorch
+if hasattr(nsfw_pipeline, 'vae'):
+    nsfw_pipeline.vae = nsfw_pipeline.vae.to(torch.float32)
+
 nsfw_pipeline.enable_sequential_cpu_offload()
 nsfw_pipeline.enable_attention_slicing()
 
