@@ -15,27 +15,19 @@ from typing import Optional
 
 router = APIRouter()
 
-# Quality boosters yang diappend ke setiap prompt
-_QUALITY_TAGS = (
-    "masterpiece, best quality, ultra realistic, photorealistic, "
-    "8k uhd, highly detailed, sharp focus, cinematic lighting, "
-    "skin texture, pores, subsurface scattering, RAW photo, "
-    "professional photography, DSLR, f/1.8 aperture"
-)
+# ~20 tokens — diletakkan di AWAL prompt agar tidak ter-truncate oleh batas 77 token CLIP
+_QUALITY_TAGS = "RAW photo, ultra realistic, photorealistic, 8k, highly detailed, sharp focus"
 
-# Negative prompt default — hindari artefak umum SDXL
+# ~30 tokens — cukup untuk hindari artefak utama tanpa melebihi batas
 _DEFAULT_NEGATIVE = (
-    "lowres, bad anatomy, bad hands, missing fingers, extra fingers, "
-    "fewer digits, mutated hands, deformed, ugly, blurry, jpeg artifacts, "
-    "signature, watermark, username, text, logo, worst quality, low quality, "
-    "normal quality, cropped, out of frame, duplicate, morbid, gross proportions, "
-    "long neck, extra limbs, disfigured, poorly drawn face, mutation, bad proportions, "
-    "cartoon, anime, illustration, painting, drawing, art, sketch, 3d render, cgi"
+    "lowres, bad anatomy, bad hands, deformed, ugly, blurry, "
+    "worst quality, low quality, watermark, signature, cartoon, anime, 3d render"
 )
 
 
 def _enhance_prompt(prompt: str) -> str:
-    return f"{prompt.rstrip(', ')}, {_QUALITY_TAGS}"
+    # Quality tags di depan → selalu masuk dalam 77 token pertama
+    return f"{_QUALITY_TAGS}, {prompt.rstrip(', ')}"
 
 
 def _build_negative(user_negative: str) -> str:
